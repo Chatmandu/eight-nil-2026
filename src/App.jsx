@@ -475,12 +475,30 @@ function rnd(s){ const x=Math.sin(s*12.9898)*43758.5453; return x-Math.floor(x);
 function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function poisson(lambda,seed){ const L=Math.exp(-lambda); let k=0,p=1; do{ k++; p*=rnd(seed+k*0.37);}while(p>L&&k<9); return k-1; }
 
+// ---- Daily Mode: same draw for everyone on a given date ----
+// Day number since epoch (UTC) gives a stable per-day integer.
+function dayNumber(d){ const t = d || new Date(); return Math.floor(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()) / 86400000); }
+function dailyKey(d){ const t = d || new Date(); const mm=String(t.getUTCMonth()+1).padStart(2,"0"); const dd=String(t.getUTCDate()).padStart(2,"0"); return `${t.getUTCFullYear()}-${mm}-${dd}`; }
+function dailyLabel(d){ const t = d || new Date(); return t.toLocaleDateString("en-GB",{ day:"numeric", month:"long", timeZone:"UTC" }); }
+// Deterministic shuffle of all nations from a numeric seed (Fisher-Yates with seeded rng).
+function dailyNationOrder(seed){
+  const order = SQUADS.map((s)=>s.nation);
+  for(let i=order.length-1;i>0;i--){
+    const r = rnd((seed+1)*7.13 + i*2.7);
+    const j = Math.floor(r*(i+1));
+    [order[i],order[j]] = [order[j],order[i]];
+  }
+  return order;
+}
+
 const STAGE_LABELS = ["Group Match 1","Group Match 2","Group Match 3","Round of 32","Round of 16","Quarter-Final","Semi-Final","Final"];
-function runTournament(team) {
+function runTournament(team, fixedSeed) {
   const matches=[]; let w=0,d=0,l=0,eliminated=false,exitStage=null,groupPts=0;
   const stats={}; team.players.forEach((p)=>{ stats[p.name]={name:p.name,flag:p.flag,club:p.club,group:SLOT_GROUP(p.code),code:p.code,g:0,a:0,cs:0,apps:0}; });
   for(let i=0;i<8;i++){
-    const m=simulateMatch(team,i,(i+1)*3.7+Math.random()*100000); m.stage=STAGE_LABELS[i]; matches.push(m);
+    // daily mode: seed derives from the date + team strength so the same XI on the same day is reproducible
+    const seed = (fixedSeed!=null) ? (fixedSeed*97.3 + (i+1)*3.7 + Math.round(team.rating*13)) : ((i+1)*3.7+Math.random()*100000);
+    const m=simulateMatch(team,i,seed); m.stage=STAGE_LABELS[i]; matches.push(m);
     if(m.result==="W"){ w++; groupPts+=(i<3?3:0); } else if(m.result==="D"){ d++; groupPts+=(i<3?1:0); } else l++;
     team.players.forEach((p)=>stats[p.name].apps++);
     m.events.forEach((e)=>{ if(e.type==="goal"&&e.team==="me"){ if(stats[e.scorer])stats[e.scorer].g++; if(e.assist&&stats[e.assist])stats[e.assist].a++; } });
@@ -515,6 +533,7 @@ export default function App() {
   const [screen, setScreen] = useState("home");
   const [mode, setMode] = useState("classic");
   const [hard, setHard] = useState(false);
+  const [daily, setDaily] = useState(true);
   const [formation, setFormation] = useState("4-3-3");
   const [slots, setSlots] = useState(() => formationSlots("4-3-3"));
   const [round, setRound] = useState(0);
@@ -524,6 +543,10 @@ export default function App() {
   const [usedNations, setUsedNations] = useState([]);
   const [tourney, setTourney] = useState(null);
   const [team, setTeam] = useState(null);
+  const [dayOrder, setDayOrder] = useState([]);
+  const todaySeed = dayNumber();
+  const todayKey = dailyKey();
+  const todayLabel = dailyLabel();
 
   const totalSlots = slots.length;
   function openSlots(s){ return s.filter((x)=>!x.player); }
@@ -531,16 +554,30 @@ export default function App() {
 
   function startGame() {
     const s = formationSlots(formation);
+    const order = daily ? dailyNationOrder(todaySeed) : [];
+    setDayOrder(order);
     setSlots(s); setRound(0); setUsedNations([]); setRerollUsed(false);
     setTourney(null); setTeam(null);
-    setScreen("draft"); doSpin([], s);
+    setScreen("draft"); doSpin([], s, order);
   }
-  function doSpin(used, currentSlots) {
+  // In daily mode the nation at each draft position is fixed by the day's order,
+  // so every player faces the identical sequence of spins.
+  function nextDailySquad(used, order) {
+    const remaining = order.filter((n)=> !used.includes(n));
+    const name = remaining[0];
+    return SQUADS.find((sq)=> sq.nation === name) || SQUADS[0];
+  }
+  function doSpin(used, currentSlots, order) {
     setSpinning(true); setSpin(null);
-    const pool = SQUADS.filter((sq)=> !used.includes(sq.nation));
-    let cands = pool.filter((sq)=> nationHasEligible(sq, currentSlots));
-    if (!cands.length) cands = pool;
-    const finalSquad = cands[Math.floor(Math.random()*cands.length)] || pool[0];
+    let finalSquad;
+    if (daily) {
+      finalSquad = nextDailySquad(used, order || dayOrder);
+    } else {
+      const pool = SQUADS.filter((sq)=> !used.includes(sq.nation));
+      let cands = pool.filter((sq)=> nationHasEligible(sq, currentSlots));
+      if (!cands.length) cands = pool;
+      finalSquad = cands[Math.floor(Math.random()*cands.length)] || pool[0];
+    }
     let ticks = 0; const maxTicks = 14 + Math.floor(Math.random()*7);
     const iv = setInterval(() => {
       ticks++;
@@ -548,7 +585,7 @@ export default function App() {
       if (ticks >= maxTicks) { clearInterval(iv); setSpin(finalSquad); setSpinning(false); }
     }, 70);
   }
-  function reroll() { if (rerollUsed || spinning) return; setRerollUsed(true); doSpin(usedNations, slots); }
+  function reroll() { if (rerollUsed || spinning || daily) return; setRerollUsed(true); doSpin(usedNations, slots); }
 
   function draftPlayer(player, squad) {
     const opens = openSlots(slots).filter((o)=> eligible(player, o.code));
@@ -561,8 +598,8 @@ export default function App() {
     const used = [...usedNations, squad.nation];
     setUsedNations(used);
     const nr = round + 1; setRound(nr);
-    if (nr >= totalSlots) { const tm = rateTeam(next, formation); const tour = runTournament(tm); setTeam(tm); setTourney(tour); setScreen("watch"); }
-    else doSpin(used, next);
+    if (nr >= totalSlots) { const tm = rateTeam(next, formation); const tour = runTournament(tm, daily ? todaySeed : null); setTeam(tm); setTourney(tour); setScreen("watch"); }
+    else doSpin(used, next, dayOrder);
   }
   function eligibleSlotsFor(player){ return openSlots(slots).filter((o)=> eligible(player, o.code)); }
 
@@ -599,9 +636,9 @@ export default function App() {
         </div>
       </header>
 
-      {screen==="home" && <Home {...{maxw,display,mode,setMode,hard,setHard,formation,setFormation,startGame}} />}
-      {screen==="draft" && <Draft {...{maxw,display,slots,round,totalSlots,spin,spinning,mode,hard,reroll,rerollUsed,draftPlayer,formation,eligibleSlotsFor}} />}
-      {screen==="watch" && tourney && team && <Watch {...{maxw,display,tourney,team,slots,formation,mode,hard,startGame,setScreen}} />}
+      {screen==="home" && <Home {...{maxw,display,mode,setMode,hard,setHard,daily,setDaily,formation,setFormation,startGame,todayLabel}} />}
+      {screen==="draft" && <Draft {...{maxw,display,slots,round,totalSlots,spin,spinning,mode,hard,daily,reroll,rerollUsed,draftPlayer,formation,eligibleSlotsFor,todayLabel}} />}
+      {screen==="watch" && tourney && team && <Watch {...{maxw,display,tourney,team,slots,formation,mode,hard,daily,todayKey,todayLabel,startGame,setScreen}} />}
 
       <footer style={{ ...maxw, padding:"26px 14px 44px", color:C.faint, fontSize:11, textAlign:"center", fontFamily:"'Spectral', serif", fontStyle:"italic" }}>
         Inspired by 38-0 and 82-0. World Cup 2026 squads, 2024-25 club form.
@@ -649,7 +686,7 @@ function Pitch({ slots, formation, highlightOpen }) {
   );
 }
 
-function Home({ maxw, display, mode, setMode, hard, setHard, formation, setFormation, startGame }) {
+function Home({ maxw, display, mode, setMode, hard, setHard, daily, setDaily, formation, setFormation, startGame, todayLabel }) {
   return (
     <main style={{ ...maxw, paddingTop:26, paddingBottom:20, animation:"slideUp .4s ease" }}>
       <div style={{ textAlign:"center", marginBottom:6 }}>
@@ -661,7 +698,25 @@ function Home({ maxw, display, mode, setMode, hard, setHard, formation, setForma
       </div>
       <div style={{ height:1, background:C.line, margin:"22px 0" }} />
 
-      <Section label="01 — Choose your shape">
+      <Section label="01 — Choose how you play">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+          <div className="btn" onClick={()=>setDaily(true)} style={{ padding:"14px 12px", borderRadius:5, border:`2px solid ${daily?C.green:C.line}`, background: daily?"rgba(31,61,43,0.08)":C.paper, textAlign:"center" }}>
+            <div style={{ ...display, fontSize:22, color: daily?C.green:C.ink }}>DAILY</div>
+            <div style={{ fontSize:10, color:C.faint, textTransform:"uppercase", letterSpacing:"0.05em" }}>Same draw for everyone</div>
+          </div>
+          <div className="btn" onClick={()=>setDaily(false)} style={{ padding:"14px 12px", borderRadius:5, border:`2px solid ${!daily?C.red:C.line}`, background: !daily?"rgba(168,32,26,0.06)":C.paper, textAlign:"center" }}>
+            <div style={{ ...display, fontSize:22, color: !daily?C.red:C.ink }}>FREE PLAY</div>
+            <div style={{ fontSize:10, color:C.faint, textTransform:"uppercase", letterSpacing:"0.05em" }}>Random spins, endless</div>
+          </div>
+        </div>
+        <p style={{ fontFamily:"'Spectral', serif", fontStyle:"italic", fontSize:13, color:C.faint, marginTop:10, textAlign:"center" }}>
+          {daily
+            ? `Today's draw · ${todayLabel}. Everyone gets the same nations in the same order. Same XI, same result. Build yours and challenge your mates to beat it.`
+            : "A fresh random draw every time. Play as many runs as you like."}
+        </p>
+      </Section>
+
+      <Section label="02 — Choose your shape">
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(82px, 1fr))", gap:8, marginBottom:14 }}>
           {Object.keys(FORMATIONS).map((f)=> <Pill key={f} active={formation===f} onClick={()=>setFormation(f)} big>{f}</Pill>)}
         </div>
@@ -669,32 +724,32 @@ function Home({ maxw, display, mode, setMode, hard, setHard, formation, setForma
         <Pitch slots={formationSlots(formation)} formation={formation} />
       </Section>
 
-      <Section label="02 — Choose your mode">
+      <Section label="03 — Choose your difficulty">
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
           <Pill active={mode==="classic"} onClick={()=>setMode("classic")} big>Classic</Pill>
           <Pill active={mode==="expert"} onClick={()=>setMode("expert")} big>Expert · Hidden</Pill>
         </div>
-        <Pill active={hard} onClick={()=>setHard(!hard)} big>{hard?"Hard Mode: No Reroll ✓":"Hard Mode (no reroll)"}</Pill>
+        {!daily && <Pill active={hard} onClick={()=>setHard(!hard)} big>{hard?"Hard Mode: No Reroll ✓":"Hard Mode (no reroll)"}</Pill>}
         <p style={{ fontFamily:"'Spectral', serif", fontStyle:"italic", fontSize:13, color:C.faint, marginTop:10 }}>
-          {mode==="classic" ? "Ratings and club stats on show." : "Stats hidden. Names and positions only."}{hard?" No rerolls.":""}
+          {mode==="classic" ? "Ratings and club stats on show." : "Stats hidden. Names and positions only."}{(!daily && hard)?" No rerolls.":""}{daily?" No rerolls in daily mode, everyone plays it straight.":""}
         </p>
       </Section>
 
-      <button className="btn" onClick={startGame} style={{ marginTop:18, width:"100%", padding:"18px", background:C.red, color:C.paper, border:"none", borderRadius:4, fontFamily:"'Bebas Neue', sans-serif", fontSize:28, letterSpacing:"0.06em", boxShadow:"0 5px 0 #6e120e" }}>SPIN THE WHEEL →</button>
+      <button className="btn" onClick={startGame} style={{ marginTop:18, width:"100%", padding:"18px", background: daily?C.green:C.red, color:C.paper, border:"none", borderRadius:4, fontFamily:"'Bebas Neue', sans-serif", fontSize:28, letterSpacing:"0.06em", boxShadow:`0 5px 0 ${daily?"#142a1d":"#6e120e"}` }}>{daily?"PLAY TODAY'S DRAW →":"SPIN THE WHEEL →"}</button>
     </main>
   );
 }
 
-function Draft({ maxw, display, slots, round, totalSlots, spin, spinning, mode, hard, reroll, rerollUsed, draftPlayer, formation, eligibleSlotsFor }) {
+function Draft({ maxw, display, slots, round, totalSlots, spin, spinning, mode, hard, daily, reroll, rerollUsed, draftPlayer, formation, eligibleSlotsFor, todayLabel }) {
   const progress = Math.round((round/totalSlots)*100);
   const showStats = mode==="classic";
   return (
     <main style={{ ...maxw, paddingTop:16, paddingBottom:20 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
         <span style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.14em", color:C.faint, fontWeight:600 }}>Pick {round+1} of {totalSlots} · {formation}</span>
-        <span style={{ fontSize:11, color:C.faint }}>{round} in</span>
+        <span style={{ fontSize:11, color: daily?C.green:C.faint, fontWeight: daily?700:400 }}>{daily?`Daily · ${todayLabel}`:`${round} in`}</span>
       </div>
-      <div style={{ height:5, background:C.paper2, borderRadius:3, marginBottom:16 }}><div style={{ height:"100%", width:progress+"%", background:C.red, borderRadius:3, transition:"width .3s" }} /></div>
+      <div style={{ height:5, background:C.paper2, borderRadius:3, marginBottom:16 }}><div style={{ height:"100%", width:progress+"%", background: daily?C.green:C.red, borderRadius:3, transition:"width .3s" }} /></div>
 
       <div style={{ textAlign:"center", marginBottom:6 }}>
         <div style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.2em", color:C.faint, marginBottom:8 }}>{spinning?"Spinning…":"Pick one · the rest of this squad is gone"}</div>
@@ -703,7 +758,7 @@ function Draft({ maxw, display, slots, round, totalSlots, spin, spinning, mode, 
           <div style={{ ...display, fontSize:"clamp(28px,8vw,38px)", color: spinning?C.gold:C.paper }}>{spin?spin.nation:"— — —"}</div>
           <div style={{ fontSize:12, color:C.gold, letterSpacing:"0.16em", fontWeight:600 }}>{spin?`WORLD CUP 2026 · ${spin.conf}`:""}</div>
         </div>
-        {!hard && (
+        {!hard && !daily && (
           <button className="btn" onClick={reroll} disabled={rerollUsed||spinning} style={{ marginTop:10, padding:"10px 18px", background:C.paper, border:`1.5px solid ${rerollUsed?C.line:C.ink}`, borderRadius:4, color: rerollUsed?C.faint:C.ink, fontSize:12, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", opacity: rerollUsed?0.5:1 }}>{rerollUsed?"Reroll used":"↻ Reroll (once)"}</button>
         )}
       </div>
@@ -737,7 +792,7 @@ function Draft({ maxw, display, slots, round, totalSlots, spin, spinning, mode, 
   );
 }
 
-function Watch({ maxw, display, tourney, team, slots, formation, mode, hard, startGame, setScreen }) {
+function Watch({ maxw, display, tourney, team, slots, formation, mode, hard, daily, todayKey, todayLabel, startGame, setScreen }) {
   const [stage, setStage] = useState(0);
   const [clock, setClock] = useState(0);
   const [shown, setShown] = useState([]);
@@ -772,7 +827,7 @@ function Watch({ maxw, display, tourney, team, slots, formation, mode, hard, sta
   const opG = m.events.filter((e)=> e.minute<=clock && e.team==="opp" && e.type==="goal").length;
   const finished = clock>=90;
 
-  if (done) return <Result {...{maxw,display,tourney,team,slots,formation,mode,hard,rec,tier,startGame,setScreen}} />;
+  if (done) return <Result {...{maxw,display,tourney,team,slots,formation,mode,hard,daily,todayKey,todayLabel,rec,tier,startGame,setScreen}} />;
 
   return (
     <main style={{ ...maxw, paddingTop:16, paddingBottom:20, animation:"slideUp .4s ease" }}>
@@ -830,7 +885,7 @@ function Watch({ maxw, display, tourney, team, slots, formation, mode, hard, sta
   );
 }
 
-function Result({ maxw, display, tourney, team, slots, formation, mode, hard, rec, tier, startGame, setScreen }) {
+function Result({ maxw, display, tourney, team, slots, formation, mode, hard, daily, todayKey, todayLabel, rec, tier, startGame, setScreen }) {
   const [shareMsg, setShareMsg] = useState("");
   const stats = [...tourney.stats];
   const scorers = [...stats].filter((s)=>s.g>0).sort((a,b)=> b.g-a.g || b.a-a.a);
@@ -847,7 +902,17 @@ function Result({ maxw, display, tourney, team, slots, formation, mode, hard, re
   const SITE_URL = "https://eight-nil.manualmode.xyz/";
   const recStr = `${rec.wins}-${rec.draws}-${rec.losses}`;
   const xiLines = slots.map((s)=> `${posTag(s.code)}: ${s.player.flag} ${s.player.name}`).join("\n");
-  const shareText =
+  const shareText = daily ?
+`⚽ 8-0 · World Cup 2026
+📅 Daily Draw · ${todayLabel}
+My XI finished: ${tier.name} (${recStr})
+${formation} · Strength ${team.rating}${boot ? ` · Top: ${boot.name} (${boot.g})` : ""}
+
+My XI:
+${xiLines}
+
+Same nations, same order, for everyone today. Beat my ${recStr} 👉 ${SITE_URL}`
+:
 `⚽ 8-0 · World Cup 2026
 My dream XI finished: ${tier.name}
 Record ${recStr} · ${formation} · Strength ${team.rating}
@@ -882,7 +947,7 @@ Think you can beat my ${recStr}? Build yours 👉 ${SITE_URL}`;
     ctx.fillStyle = C.red; ctx.font = "700 64px Georgia, serif"; ctx.textAlign="left";
     ctx.fillText("8–0", 36, 86);
     ctx.fillStyle = C.faint; ctx.font = "italic 18px Georgia, serif";
-    ctx.fillText("World Cup 2026 · Dream XI", 150, 80);
+    ctx.fillText(daily ? `World Cup 2026 · Daily ${todayLabel}` : "World Cup 2026 · Dream XI", 150, 80);
     ctx.strokeStyle = C.line; ctx.beginPath(); ctx.moveTo(36,108); ctx.lineTo(W-36,108); ctx.stroke();
     // result
     ctx.fillStyle = C.faint; ctx.font = "600 14px Georgia"; ctx.fillText("FINAL STANDING", 36, 150);
@@ -944,7 +1009,7 @@ Think you can beat my ${recStr}? Build yours 👉 ${SITE_URL}`;
   return (
     <main style={{ ...maxw, paddingTop:18, paddingBottom:20, animation:"slideUp .4s ease" }}>
       <div style={{ textAlign:"center", border:`3px double ${C.ink}`, padding:"20px 14px", background:C.paper2 }}>
-        <div style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.26em", color:C.faint }}>Final Standing</div>
+        <div style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.26em", color: daily?C.green:C.faint }}>{daily ? `Daily Draw · ${todayLabel}` : "Final Standing"}</div>
         <div style={{ ...display, fontSize:"clamp(58px,18vw,84px)", color:C.red, margin:"2px 0" }}>{rec.wins}&ndash;{rec.draws}&ndash;{rec.losses}</div>
         <div style={{ ...display, fontSize:"clamp(28px,8vw,38px)", color:tier.color }}>{tier.name}</div>
         <p style={{ fontFamily:"'Spectral', serif", fontStyle:"italic", fontSize:15, color:"#4a443a", maxWidth:420, margin:"6px auto 0" }}>{tier.note}</p>

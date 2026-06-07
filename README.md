@@ -78,3 +78,23 @@ src/
   `og-image.png` = the site-wide link-preview card. Two different things.
 - Squad data is the `SQUADS` array at the top of `src/App.jsx`, one line per
   player. Edit ratings/clubs/call-ups there; nothing else needs changing.
+
+## Daily Mode (the headline feature)
+
+Two ways to play, chosen on the home screen:
+
+- **Daily** — everyone who plays on a given calendar day (UTC) gets the *same
+  nations in the same order*, like Wordle. Because the draw is identical for
+  all players, the only variable is who you pick for each slot. The match
+  results are also seeded from the date, so the same XI always produces the
+  same outcome, which makes head-to-head comparison fair. No rerolls. The
+  share text and result card are stamped with the date so friends know which
+  draw to attempt.
+- **Free Play** — a fresh random draw every time, unlimited runs, reroll
+  available (unless Hard Mode is on).
+
+How it works under the hood (no backend needed): the date is converted to a
+day-number, which seeds a deterministic Fisher-Yates shuffle of the 24 nations
+(`dailyNationOrder`) and the match simulation (`runTournament(team, seed)`).
+Everything is computed client-side, so it stays a static site. The draw rolls
+over at 00:00 UTC.
