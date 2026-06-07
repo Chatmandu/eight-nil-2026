@@ -844,7 +844,7 @@ function Result({ maxw, display, tourney, team, slots, formation, mode, hard, re
   const posTag = (code)=> POS_TAG[code] || code;
 
   // ----- Share -----
-  const SITE_URL = "https://seven-nil.manualmode.xyz/";
+  const SITE_URL = "https://eight-nil.manualmode.xyz/";
   const recStr = `${rec.wins}-${rec.draws}-${rec.losses}`;
   const xiLines = slots.map((s)=> `${posTag(s.code)}: ${s.player.flag} ${s.player.name}`).join("\n");
   const shareText =
@@ -906,7 +906,7 @@ Think you can beat my ${recStr}? Build yours 👉 ${SITE_URL}`;
     ctx.fillStyle = C.gold; ctx.font = "700 20px Georgia"; ctx.textAlign="center";
     ctx.fillText(`Can you beat ${recStr}?`, W/2, H-58);
     ctx.fillStyle = C.paper; ctx.font = "700 16px Georgia";
-    ctx.fillText("seven-nil.manualmode.xyz", W/2, H-32);
+    ctx.fillText("eight-nil.manualmode.xyz", W/2, H-32);
     ctx.fillStyle = C.faint; ctx.font = "italic 12px Georgia";
     ctx.fillText("Build your World Cup 2026 XI", W/2, H-14);
     return cv;
@@ -918,14 +918,14 @@ Think you can beat my ${recStr}? Build yours 👉 ${SITE_URL}`;
       const cv = buildCardCanvas();
       cv.toBlob(async (blob)=> {
         if (!blob) { setShareMsg("Could not build image on this device."); return; }
-        const file = new File([blob], "seven-nil-2026.png", { type:"image/png" });
+        const file = new File([blob], "eight-nil-2026.png", { type:"image/png" });
         try {
           if (navigator.canShare && navigator.canShare({ files:[file] }) && navigator.share) {
             await navigator.share({ files:[file], title:"8-0 · World Cup 2026", text:`My dream XI finished ${tier.name} (${recStr}). Beat it?` });
             return;
           }
         } catch(e){ /* fall through to download */ }
-        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "seven-nil-2026.png"; a.click();
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "eight-nil-2026.png"; a.click();
         setShareMsg("Image saved, share it from your photos.");
       }, "image/png");
     } catch(e){ setShareMsg("Image sharing isn't supported here, use Share text instead."); }

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://seven-nil.manualmode.xyz/sitemap.xml
+Sitemap: https://eight-nil.manualmode.xyz/sitemap.xml
