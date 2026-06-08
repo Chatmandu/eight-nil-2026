@@ -437,13 +437,18 @@ const OPP_GIANTS = [
   { name:"Portugal", flag:"🇵🇹" },{ name:"Netherlands", flag:"🇳🇱" },
 ];
 
-function simulateMatch(team, roundIdx, seed) {
+function simulateMatch(team, roundIdx, seed, usedOpponents) {
   const knockout = roundIdx >= 3;
   // knockout rounds are 3..7 (R32, R16, QF, SF, Final); opponent ramps to the final
   const oppRating = (knockout ? 80 + (roundIdx-3)*2.2 : 77 + roundIdx*1.3) + rnd(seed)*2.4;
   // giants appear from the quarter-finals (round 5) onward; mixed pool earlier in knockouts
-  const pool = (roundIdx >= 5) ? OPP_GIANTS : (roundIdx >= 3 ? [...OPP_GIANTS, ...OPP_POOL] : OPP_POOL);
-  const opp = pool[Math.floor(rnd(seed*3.1)*pool.length)];
+  let pool = (roundIdx >= 5) ? OPP_GIANTS : (roundIdx >= 3 ? [...OPP_GIANTS, ...OPP_POOL] : OPP_POOL);
+  // never draw a nation already faced this tournament
+  const used = usedOpponents || [];
+  let avail = pool.filter((o)=> !used.includes(o.name));
+  if (!avail.length) avail = [...OPP_GIANTS, ...OPP_POOL].filter((o)=> !used.includes(o.name));
+  if (!avail.length) avail = pool; // ultimate fallback (shouldn't happen: pools are large enough)
+  const opp = avail[Math.floor(rnd(seed*3.1)*avail.length)];
   const myXG = clamp(0.7 + (team.att - oppRating)/14 + 0.6, 0.2, 4.2);
   const oppXG = clamp(0.7 + (oppRating - team.def)/14 + 0.2, 0.1, 3.6);
   const myGoals = poisson(myXG, seed*1.7), oppGoals = poisson(oppXG, seed*2.3);
@@ -498,7 +503,7 @@ function runTournament(team, fixedSeed) {
   for(let i=0;i<8;i++){
     // daily mode: seed derives from the date + team strength so the same XI on the same day is reproducible
     const seed = (fixedSeed!=null) ? (fixedSeed*97.3 + (i+1)*3.7 + Math.round(team.rating*13)) : ((i+1)*3.7+Math.random()*100000);
-    const m=simulateMatch(team,i,seed); m.stage=STAGE_LABELS[i]; matches.push(m);
+    const m=simulateMatch(team,i,seed,matches.map((x)=>x.opp.name)); m.stage=STAGE_LABELS[i]; matches.push(m);
     if(m.result==="W"){ w++; groupPts+=(i<3?3:0); } else if(m.result==="D"){ d++; groupPts+=(i<3?1:0); } else l++;
     team.players.forEach((p)=>stats[p.name].apps++);
     m.events.forEach((e)=>{ if(e.type==="goal"&&e.team==="me"){ if(stats[e.scorer])stats[e.scorer].g++; if(e.assist&&stats[e.assist])stats[e.assist].a++; } });
